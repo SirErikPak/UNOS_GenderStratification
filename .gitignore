@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+__init__.py
+
+# Data and OS files
+data/
+Backup/
+.DS_Store
+.vscode
+.Rhistory
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+Untitled*.*
+*old*.*
+# Misc files
+unos_gender_stratification.egg-info/
+
+
+# Environments and Secrets
+.venv/
+venv/
+env/
+.env
