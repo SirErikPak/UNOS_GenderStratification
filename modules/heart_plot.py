@@ -314,3 +314,45 @@ def plot_survival_trend(data, feature_col, survival_col, window_size=100):
 
     plt.tight_layout()
     plt.show()
+
+
+# -------------------------------------------------------------------------------------------
+# 5: Plot Distribution of Original vs. Transformed Data for Imputation Strategy
+# -------------------------------------------------------------------------------------------
+def plot_transform_distribution(data, txt='', bins=30, fig_size=(20, 6)):
+    """
+    Plots histograms of original and transformed data to find the best 
+    distribution for modeling or imputation.
+    """
+    # 1. Transformations
+    # np.log1p(x) is mathematically equal to ln(1 + x) but more accurate for small x
+    log_data = np.log1p(data) 
+    sqrt_data = np.sqrt(data)
+    square_data = np.square(data)
+    
+    # Using a clip or a safety check for exp to prevent overflow errors
+    # P/F ratios are often >100, which would make exp(x) approach infinity
+    exp_data = np.exp(np.clip(data, None, 700)) 
+
+    # 2. Creating subplots (1 row, 5 columns)
+    fig, axes = plt.subplots(1, 5, figsize=fig_size, sharey=False)
+    
+    # Configuration for plotting
+    configs = [
+        (data, 'Original Data', 'blue', f"{txt}"),
+        (log_data, 'Log1p Transformed', 'green', f"log1p({txt})"),
+        (sqrt_data, 'Sqrt Transformed', 'orange', f"sqrt({txt})"),
+        (square_data, 'Square Transformed', 'cyan', f"square({txt})"),
+        (exp_data, 'Exp Transformed', 'red', f"exp({txt})")
+    ]
+    
+    # 3. Iterative plotting
+    for i, (d, title, color, xlabel) in enumerate(configs):
+        axes[i].hist(d, bins=bins, color=color, alpha=0.7, edgecolor='black')
+        axes[i].set_title(title, fontsize=12)
+        axes[i].set_xlabel(xlabel)
+        if i == 0:
+            axes[i].set_ylabel("Frequency")
+    
+    plt.tight_layout()
+    plt.show()

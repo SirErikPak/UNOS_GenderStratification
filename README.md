@@ -6,7 +6,7 @@ Heart transplantation is the definitive treatment for end-stage heart failure; h
 
 ## Methods
 
-This study analyzed adult heart transplant recipients from the United Network for Organ Sharing (UNOS) registry using a 10-year contemporary cohort to reduce confounding from historical changes in allocation policy and clinical practice.
+This study analyzed adult heart transplant recipients from the United Network for Organ Sharing (UNOS) registry using a 11-year contemporary cohort to reduce confounding from historical changes in allocation policy and clinical practice.
 
 A structured preprocessing pipeline was implemented, including feature harmonization across clinical, donor, and medication-related variables. Statistical feature screening was applied to remove non-informative predictors. Principal Component Analysis (PCA) was then used for dimensionality reduction, transforming correlated clinical variables into orthogonal components capturing dominant covariance structure. This approach reduced multicollinearity and stabilized downstream modeling.
 
