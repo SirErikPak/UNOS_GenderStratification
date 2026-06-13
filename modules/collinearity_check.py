@@ -1,24 +1,28 @@
 import pandas as pd
 import numpy as np
-import pandas as pd
 from scipy.stats import chi2_contingency
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+import statsmodels.api as sm
 
+# Define severity levels and corresponding actions
 SEVERITY_ORDER = ["Severe", "High", "Moderate"]
 
-# Maps severity levels to recommended actions
+# Mapping from severity level - recommended action
 ACTION_MAP = {
-    "Severe": "Drop or transform variable",
-    "High": "Consider dropping one variable",
-    "Moderate": "Monitor",
+    "Severe": "Drop or transform variable or consider removing it.",
+    "High": "Consider dropping one variable or combining it with another.",
+    "Moderate": "Monitor or Consider removing one of the features or combining them.",
 }
 
 
-def compute_collinearity(df, handle_missing_vif='median'):
+# -------------------------------------------------------------------------------
+# 1: Compute collinearity
+# -------------------------------------------------------------------------------
+def compute_collinearity(df, handle_missing_vif='median', verbose_vif_errors=True):
     """
     Compute mixed-type collinearity metrics for a dataset.
 
-    This function calculates:
+    Computes:
     - Pearson correlation (numeric–numeric)
     - Cramér's V (categorical–categorical)
     - Eta / correlation ratio (categorical–numeric)
@@ -27,24 +31,21 @@ def compute_collinearity(df, handle_missing_vif='median'):
     Parameters
     ----------
     df : pd.DataFrame
-        Input dataset containing numeric and/or categorical variables.
-
+        Input dataset.
     handle_missing_vif : {'median', 'drop'}, default='median'
-        Strategy for handling missing values before VIF computation:
-        - 'median': fill missing numeric values with column medians
-        - 'drop'  : drop rows with missing numeric values (may reduce sample size)
+        How to handle missing values before VIF:
+        - 'median': fill missing numeric values with medians
+        - 'drop'  : drop rows with missing numeric values
+    verbose_vif_errors : bool, default=True
+        If True, prints features with R²≈1 (perfect collinearity).
 
     Returns
     -------
     dict
-        Dictionary with keys:
-        - 'pearson'   : DataFrame of Pearson correlations
-        - 'cramers_v' : DataFrame of Cramér's V values
-        - 'eta'       : DataFrame of Eta values
-        - 'vif'       : DataFrame of VIF values
+        Dictionary with keys: 'pearson', 'cramers_v', 'eta', 'vif'.
     """
 
-    # Work on a local copy to avoid modifying original data
+    # Work on a copy to avoid modifying original data
     local_df = df.copy()
 
     # Identify numeric and categorical columns
@@ -54,14 +55,14 @@ def compute_collinearity(df, handle_missing_vif='median'):
     results = {}
 
     # ------------------------------------------------------------------
-    # 1. Pearson correlation (numeric–numeric)
+    # 1-1: Pearson correlation (numeric–numeric)
     # ------------------------------------------------------------------
     results['pearson'] = (
         local_df[numeric_cols].corr() if len(numeric_cols) > 1 else None
     )
 
     # ------------------------------------------------------------------
-    # 2. Cramér's V (categorical–categorical)
+    # 1-2: Cramér's V (categorical–categorical)
     # ------------------------------------------------------------------
     def cramers_v(x, y):
         """Compute Cramér's V for two categorical variables."""
@@ -75,21 +76,21 @@ def compute_collinearity(df, handle_missing_vif='median'):
         n = table.sum().sum()
         r, k = table.shape
 
-        # If only one category exists, association is undefined
+        # If only one category exists, association undefined
         if min(r, k) <= 1:
             return np.nan
 
         chi2 = chi2_contingency(table)[0]
         return np.sqrt(chi2 / (n * (min(r, k) - 1)))
 
+    # Build full symmetric Cramér's V matrix
     if len(cat_cols) > 1:
         mat = pd.DataFrame(index=cat_cols, columns=cat_cols, dtype=float)
 
-        # Fill symmetric matrix
         for i, c1 in enumerate(cat_cols):
             for j, c2 in enumerate(cat_cols):
                 if i == j:
-                    mat.iloc[i, j] = 1.0  # perfect association with itself
+                    mat.iloc[i, j] = 1.0  # perfect with itself
                 elif i < j:
                     mat.iloc[i, j] = cramers_v(local_df[c1], local_df[c2])
                 else:
@@ -100,10 +101,10 @@ def compute_collinearity(df, handle_missing_vif='median'):
         results['cramers_v'] = None
 
     # ------------------------------------------------------------------
-    # 3. Eta (categorical–numeric)
+    # 1-3: Eta (categorical–numeric)
     # ------------------------------------------------------------------
     def correlation_ratio(categories, values):
-        """Compute correlation ratio (η) for categorical → numeric association."""
+        """Compute correlation ratio (η) for categorical → numeric."""
         mask = pd.Series(categories).notna().values & pd.Series(values).notna().values
 
         if not mask.any():
@@ -130,10 +131,10 @@ def compute_collinearity(df, handle_missing_vif='median'):
 
         return np.sqrt(ss_between / ss_total) if ss_total > 0 else 0.0
 
+    # Build categorical–numeric Eta matrix
     if len(cat_cols) > 0 and len(numeric_cols) > 0:
         eta_mat = pd.DataFrame(index=cat_cols, columns=numeric_cols, dtype=float)
 
-        # Compute eta for each categorical–numeric pair
         for cat in cat_cols:
             for num in numeric_cols:
                 eta_mat.loc[cat, num] = correlation_ratio(local_df[cat], local_df[num])
@@ -143,7 +144,7 @@ def compute_collinearity(df, handle_missing_vif='median'):
         results['eta'] = None
 
     # ------------------------------------------------------------------
-    # 4. VIF (numeric multicollinearity)
+    # 1-4: VIF (numeric multicollinearity)
     # ------------------------------------------------------------------
     if len(numeric_cols) > 1:
 
@@ -157,14 +158,31 @@ def compute_collinearity(df, handle_missing_vif='median'):
         if X.shape[0] == 0:
             raise ValueError("VIF failed: no complete rows remain. Impute data first.")
 
-        # Add constant term for VIF computation
+        # Add constant column for VIF computation
         X_vif = X.assign(const=1)
+        X_vif_values = X_vif.values
+
+        # Optional diagnostic: detect perfect collinearity
+        if verbose_vif_errors:
+            problem_features = []
+            for i, col in enumerate(numeric_cols):
+                y = X_vif_values[:, i]
+                x_others = np.delete(X_vif_values, i, axis=1)
+                r_sq = sm.OLS(y, x_others).fit().rsquared
+                if r_sq >= 0.9999:  # nearly perfect R²
+                    problem_features.append((col, r_sq))
+
+            if problem_features:
+                print("⚠ VIF divide-by-zero / inf detected for:")
+                for col, r_sq in problem_features:
+                    print(f"  - {col}  (R²={r_sq:.10f})")
+                print("  These features are perfectly collinear with the rest.")
 
         # Compute VIF for each numeric feature
         results['vif'] = pd.DataFrame({
             'feature': numeric_cols,
             'VIF': [
-                variance_inflation_factor(X_vif.values, i)
+                variance_inflation_factor(X_vif_values, i)
                 for i in range(len(numeric_cols))
             ]
         }).sort_values('VIF', ascending=False).reset_index(drop=True)
@@ -175,171 +193,82 @@ def compute_collinearity(df, handle_missing_vif='median'):
     return results
 
 
-
+# -------------------------------------------------------------------------------
+# 2a: Assess collinearity severity
+# -------------------------------------------------------------------------------
+# Define severity levels and corresponding actions
 def get_severity(metric_type: str, value: float) -> str:
-    """
-    Determine severity level for a collinearity metric.
-
-    Parameters
-    ----------
-    metric_type : str
-        The type of metric ("Pearson", "Cramér's V", "Eta", "VIF").
-    value : float
-        The metric value.
-
-    Returns
-    -------
-    str
-        Severity category: "Severe", "High", or "Moderate".
-    """
-
-    # VIF uses different thresholds than correlation metrics
+    """Assign severity level based on metric type and value."""
     if metric_type == "VIF":
         return "Severe" if value >= 10 else "Moderate"
-
-    # Correlation-based metrics: High if ≥ 0.90
     return "High" if value >= 0.90 else "Moderate"
 
-
+# -------------------------------------------------------------------------------
+# 2b: Define the recommended actions for each severity level
+# -------------------------------------------------------------------------------
 def build_flag(metric_type, var1, var2, value, pair_type):
-    """
-    Construct a standardized flag record for a collinearity issue.
-
-    Parameters
-    ----------
-    metric_type : str
-        Type of metric producing the flag.
-    var1, var2 : str
-        Variable names involved in the flagged relationship.
-    value : float
-        Strength of association.
-    pair_type : str
-        Relationship type (numeric-numeric, categorical-categorical, etc.)
-
-    Returns
-    -------
-    dict
-        A dictionary describing the flagged collinearity issue.
-    """
-
+    """Construct a standardized flag record."""
     severity = get_severity(metric_type, value)
-
     return {
         "type": metric_type,
         "var1": var1,
         "var2": var2,
-        "value": round(abs(value), 4),  # absolute value for consistency
+        "value": round(abs(value), 4),
         "severity": severity,
         "pair_type": pair_type,
         "recommended_action": ACTION_MAP[severity],
     }
 
-
+# -------------------------------------------------------------------------------
+# 2c: Define the recommended actions for each severity level
+# -------------------------------------------------------------------------------
 def scan_symmetric_matrix(matrix, metric_type, threshold, pair_type):
-    """
-    Scan the upper triangle of a symmetric association matrix
-    (Pearson or Cramér's V).
-
-    Parameters
-    ----------
-    matrix : pd.DataFrame
-        Symmetric matrix of pairwise associations.
-    metric_type : str
-        Name of the metric.
-    threshold : float
-        Minimum value required to flag a pair.
-    pair_type : str
-        Relationship type.
-
-    Returns
-    -------
-    list of dict
-        List of flagged collinearity issues.
-    """
-
+    """Scan upper triangle of a symmetric matrix (Pearson or Cramér's V)."""
     flags = []
     cols = matrix.columns.tolist()
 
-    # Only scan upper triangle to avoid duplicates
     for i in range(len(cols)):
         for j in range(i + 1, len(cols)):
             value = matrix.iloc[i, j]
-
-            # Flag if above threshold
             if pd.notna(value) and abs(value) >= threshold:
-                flags.append(
-                    build_flag(metric_type, cols[i], cols[j], value, pair_type)
-                )
+                flags.append(build_flag(metric_type, cols[i], cols[j], value, pair_type))
 
     return flags
 
 
+# -------------------------------------------------------------------------------
+# 2d: Scan Eta matrix
+# -------------------------------------------------------------------------------
 def scan_eta_matrix(matrix, threshold):
-    """
-    Scan categorical–numeric Eta matrix.
-
-    Parameters
-    ----------
-    matrix : pd.DataFrame
-        Eta values for categorical rows × numeric columns.
-    threshold : float
-        Minimum eta required to flag.
-
-    Returns
-    -------
-    list of dict
-        Flagged categorical–numeric associations.
-    """
-
+    """Scan categorical–numeric Eta matrix."""
     flags = []
-
     for cat in matrix.index:
         for num in matrix.columns:
             value = matrix.loc[cat, num]
-
-            # Eta is always positive; no abs() needed
             if pd.notna(value) and value >= threshold:
-                flags.append(
-                    build_flag("Eta", cat, num, value, "categorical-numeric")
-                )
-
+                flags.append(build_flag("Eta", cat, num, value, "categorical-numeric"))
     return flags
 
 
+# -------------------------------------------------------------------------------
+# 2e: Scan VIF table
+# -------------------------------------------------------------------------------
 def scan_vif(vif_df, threshold):
-    """
-    Scan VIF results for problematic multicollinearity.
-
-    Parameters
-    ----------
-    vif_df : pd.DataFrame
-        DataFrame with columns ["feature", "VIF"].
-    threshold : float
-        Minimum VIF required to flag.
-
-    Returns
-    -------
-    list of dict
-        Flagged VIF issues.
-    """
-
+    """Scan VIF table for problematic multicollinearity."""
     flags = []
-
     for _, row in vif_df.iterrows():
-
-        # Skip intercept term
         if (
             row["feature"] != "const"
             and pd.notna(row["VIF"])
+            and np.isfinite(row["VIF"])
             and row["VIF"] >= threshold
         ):
-            flags.append(
-                build_flag("VIF", row["feature"], "—", row["VIF"], "numeric")
-            )
-
+            flags.append(build_flag("VIF", row["feature"], "—", row["VIF"], "numeric"))
     return flags
 
-
+# -------------------------------------------------------------------------------
+# 3: Summarize collinearity issues
+# -------------------------------------------------------------------------------
 def summarise_collinearity(
     results,
     pearson_thresh=0.70,
@@ -349,10 +278,10 @@ def summarise_collinearity(
 ):
     """
     Summarize all detected collinearity issues across:
-    - Pearson (numeric–numeric)
-    - Cramér's V (categorical–categorical)
-    - Eta (categorical–numeric)
-    - VIF (numeric multicollinearity)
+    - Pearson
+    - Cramér's V
+    - Eta
+    - VIF
 
     Parameters
     ----------
@@ -366,11 +295,10 @@ def summarise_collinearity(
     Returns
     -------
     pd.DataFrame or None
-        Sorted table of flagged collinearity issues,
-        or None if no issues exceed thresholds.
+        Sorted table of flagged collinearity issues.
     """
 
-    # Map each metric to its scanning function
+    # Map metric → scanning function
     scanners = {
         "pearson": lambda: scan_symmetric_matrix(
             results["pearson"], "Pearson", pearson_thresh, "numeric-numeric"
@@ -384,12 +312,12 @@ def summarise_collinearity(
 
     flags = []
 
-    # Run scanners only for metrics present in results
+    # Run scanners only for metrics that exist
     for key, scanner in scanners.items():
         if results.get(key) is not None:
             flags.extend(scanner())
 
-    # No collinearity detected
+    # No issues found
     if not flags:
         print("No collinearity flags above thresholds.")
         return None
@@ -402,7 +330,6 @@ def summarise_collinearity(
         output["severity"], categories=SEVERITY_ORDER, ordered=True
     )
 
-    # Sort by severity then by strength
     return (
         output.sort_values(["severity", "value"], ascending=[True, False])
         .reset_index(drop=True)
